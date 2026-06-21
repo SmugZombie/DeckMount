@@ -1,0 +1,11 @@
+{
+  "name": "Network Shares",
+  "author": "Ron Egli / OpenAI",
+  "flags": ["_root"],
+  "api_version": 1,
+  "publish": {
+    "tags": ["network", "smb", "nfs", "files", "mount"],
+    "description": "Mount and browse SMB/CIFS and NFS network shares from Steam Big Picture / Game Mode.",
+    "image": ""
+  }
+}
