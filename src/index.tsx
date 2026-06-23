@@ -6,6 +6,12 @@ import {
   ToggleField,
   DropdownItem,
   staticClasses,
+  showModal,
+  ModalRoot,
+  DialogButton,
+  DialogHeader,
+  DialogBody,
+  Focusable,
 } from "@decky/ui";
 import { callable, definePlugin, toaster } from "@decky/api";
 import { useEffect, useState } from "react";
@@ -79,170 +85,451 @@ function sizeText(bytes: number) {
   return `${value.toFixed(unit === 0 ? 0 : 1)} ${units[unit]}`;
 }
 
-function Content() {
+// ─── Share Form ────────────────────────────────────────────────────────────────
+
+function ShareForm({
+  form,
+  setForm,
+  onSave,
+  onCancel,
+}: {
+  form: Share;
+  setForm: React.Dispatch<React.SetStateAction<Share>>;
+  onSave: () => void;
+  onCancel: () => void;
+}) {
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+      <TextField label="Name" value={form.name} onChange={textFieldSetter(setForm, "name")} />
+      <DropdownItem
+        label="Type"
+        selectedOption={form.type}
+        rgOptions={[
+          { data: "smb", label: "SMB / CIFS" },
+          { data: "nfs", label: "NFS" },
+        ]}
+        onChange={(opt: any) => setForm((f) => ({ ...f, type: opt.data }))}
+      />
+      <TextField label="Host / IP" value={form.host} onChange={textFieldSetter(setForm, "host")} />
+      <TextField
+        label={form.type === "smb" ? "Share name" : "Export path"}
+        value={form.share}
+        onChange={textFieldSetter(setForm, "share")}
+      />
+      {form.type === "smb" && (
+        <>
+          <ToggleField label="Guest access" checked={!!form.guest} onChange={valueSetter(setForm, "guest")} />
+          {!form.guest && (
+            <>
+              <TextField label="Username" value={form.username || ""} onChange={textFieldSetter(setForm, "username")} />
+              <TextField label="Password" value={form.password || ""} onChange={textFieldSetter(setForm, "password")} />
+            </>
+          )}
+          <TextField label="Domain (optional)" value={form.domain || ""} onChange={textFieldSetter(setForm, "domain")} />
+          <TextField label="SMB version" value={form.version || "3.0"} onChange={textFieldSetter(setForm, "version")} />
+        </>
+      )}
+      <TextField label="Extra mount options" value={form.mountOptions || ""} onChange={textFieldSetter(setForm, "mountOptions")} />
+      <div style={{ display: "flex", gap: "8px", marginTop: "4px" }}>
+        <DialogButton style={{ flex: 1 }} onClick={onSave}>
+          Save
+        </DialogButton>
+        <DialogButton style={{ flex: 1, opacity: 0.7 }} onClick={onCancel}>
+          Cancel
+        </DialogButton>
+      </div>
+    </div>
+  );
+}
+
+// ─── Manager Modal ─────────────────────────────────────────────────────────────
+
+function ManagerModal({ closeModal, startTab }: { closeModal?: () => void; startTab?: "shares" | "browse" }) {
+  const [tab, setTab] = useState<"shares" | "browse">(startTab ?? "shares");
   const [shares, setShares] = useState<Share[]>([]);
   const [form, setForm] = useState<Share>(emptyShare);
-  const [selected, setSelected] = useState<string>("");
+  const [showForm, setShowForm] = useState(false);
+  const [editingName, setEditingName] = useState<string | null>(null);
+
+  // browse state
+  const [browseShare_, setBrowseShare] = useState<string>("");
   const [path, setPath] = useState<string>("");
   const [items, setItems] = useState<BrowseItem[]>([]);
-  const [status, setStatus] = useState<string>("Loading...");
-  const [showAdd, setShowAdd] = useState<boolean>(false);
-  const [helperStatus, setHelperStatus] = useState<string>("");
+  const [browseMsg, setBrowseMsg] = useState<string>("");
 
   const refresh = async () => {
-    try {
-      const h = await health();
-      setHelperStatus(`root=${h.isRoot ? "yes" : "no"}, SMB=${h.hasMountCifs ? "yes" : "missing"}, NFS=${h.hasMountNfs ? "yes" : "missing"}`);
-      const list = await getShares();
-      setShares(list);
-      if (!selected && list.length > 0) setSelected(list[0].name);
-      setStatus(list.length ? "Ready" : "Add a share to get started");
-    } catch (e: any) {
-      setStatus(`Error: ${e?.message ?? e}`);
-    }
-  };
-
-  const browse = async (shareName = selected, nextPath = path) => {
-    if (!shareName) return;
-    const res = await browseShare(shareName, nextPath || "");
-    if (!res.ok) {
-      setItems([]);
-      setStatus(res.error || "Browse failed");
-      return;
-    }
-    setPath(res.path || "");
-    setItems(res.items || []);
-    setStatus(res.mountpoint || "Mounted");
+    const list = await getShares();
+    setShares(list);
+    if (!browseShare_ && list.length > 0) setBrowseShare(list[0].name);
   };
 
   useEffect(() => {
     refresh();
   }, []);
 
-  const selectedShare = shares.find((s) => s.name === selected);
+  const browse = async (shareName = browseShare_, nextPath = path) => {
+    if (!shareName) return;
+    setBrowseMsg("Loading…");
+    const res = await browseShare(shareName, nextPath || "");
+    if (!res.ok) {
+      setItems([]);
+      setBrowseMsg(res.error || "Browse failed");
+      return;
+    }
+    setPath(res.path || "");
+    setItems(res.items || []);
+    setBrowseMsg(res.mountpoint ? `📂 ${res.mountpoint}` : "");
+  };
+
+  const handleSave = async () => {
+    try {
+      const saved = await saveShare(form);
+      toaster.toast({ title: "Network Shares", body: `Saved ${saved.name}` });
+      setShowForm(false);
+      setEditingName(null);
+      setForm({ ...emptyShare });
+      await refresh();
+    } catch (e: any) {
+      toaster.toast({ title: "Save failed", body: e?.message ?? String(e) });
+    }
+  };
+
+  const handleDelete = async (name: string) => {
+    const res = await deleteShare(name);
+    toaster.toast({ title: "Network Shares", body: res.ok ? `Deleted ${name}` : res.stderr || "Delete failed" });
+    await refresh();
+  };
+
+  const handleMountToggle = async (share: Share) => {
+    const res = share.mounted ? await unmountShare(share.name) : await mountShare(share.name);
+    toaster.toast({
+      title: "Network Shares",
+      body: res.ok ? (share.mounted ? `Unmounted ${share.name}` : `Mounted ${share.name}`) : res.stderr || res.hint || "Failed",
+    });
+    await refresh();
+  };
+
+  const tabBtn = (label: string, value: "shares" | "browse") => (
+    <DialogButton
+      onClick={() => setTab(value)}
+      style={{
+        flex: 1,
+        fontWeight: tab === value ? "bold" : "normal",
+        opacity: tab === value ? 1 : 0.55,
+        borderBottom: tab === value ? "2px solid #1a9fff" : "2px solid transparent",
+      }}
+    >
+      {label}
+    </DialogButton>
+  );
+
+  return (
+    <ModalRoot onCancel={closeModal}>
+      <DialogHeader>Network Shares Manager</DialogHeader>
+      <DialogBody>
+        <Focusable style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
+          {/* Tab bar */}
+          <div style={{ display: "flex", gap: "8px" }}>
+            {tabBtn("Manage Shares", "shares")}
+            {tabBtn("Browse Files", "browse")}
+          </div>
+
+          {/* ── Manage Shares tab ──────────────────────────────────── */}
+          {tab === "shares" && (
+            <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
+              {shares.length === 0 && (
+                <div style={{ opacity: 0.6, textAlign: "center", padding: "12px" }}>
+                  No shares configured. Add one below.
+                </div>
+              )}
+
+              {shares.map((share) => (
+                <div
+                  key={share.name}
+                  style={{
+                    background: "rgba(255,255,255,0.06)",
+                    borderRadius: "8px",
+                    padding: "12px",
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: "6px",
+                  }}
+                >
+                  <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                    <span style={{ fontSize: "18px", color: share.mounted ? "#4caf50" : "#aaa" }}>
+                      {share.mounted ? "●" : "○"}
+                    </span>
+                    <div style={{ flex: 1 }}>
+                      <div style={{ fontWeight: "bold" }}>{share.name}</div>
+                      <div style={{ opacity: 0.65, fontSize: "12px" }}>
+                        {share.type.toUpperCase()} · {share.host}/{share.share}
+                      </div>
+                      {share.mountpoint && (
+                        <div style={{ opacity: 0.5, fontSize: "11px" }}>{share.mountpoint}</div>
+                      )}
+                    </div>
+                  </div>
+                  <div style={{ display: "flex", gap: "6px" }}>
+                    <DialogButton style={{ flex: 1 }} onClick={() => handleMountToggle(share)}>
+                      {share.mounted ? "Unmount" : "Mount"}
+                    </DialogButton>
+                    <DialogButton
+                      style={{ flex: 1 }}
+                      onClick={() => {
+                        setForm({ ...share, password: "" });
+                        setEditingName(share.name);
+                        setShowForm(true);
+                      }}
+                    >
+                      Edit
+                    </DialogButton>
+                    <DialogButton
+                      style={{ flex: 1, opacity: 0.7 }}
+                      onClick={() => handleDelete(share.name)}
+                    >
+                      Delete
+                    </DialogButton>
+                  </div>
+                </div>
+              ))}
+
+              {!showForm && (
+                <DialogButton
+                  onClick={() => {
+                    setForm({ ...emptyShare });
+                    setEditingName(null);
+                    setShowForm(true);
+                  }}
+                >
+                  + Add Share
+                </DialogButton>
+              )}
+
+              {showForm && (
+                <div
+                  style={{
+                    background: "rgba(255,255,255,0.06)",
+                    borderRadius: "8px",
+                    padding: "12px",
+                  }}
+                >
+                  <div style={{ fontWeight: "bold", marginBottom: "10px" }}>
+                    {editingName ? `Edit: ${editingName}` : "New Share"}
+                  </div>
+                  <ShareForm
+                    form={form}
+                    setForm={setForm}
+                    onSave={handleSave}
+                    onCancel={() => {
+                      setShowForm(false);
+                      setEditingName(null);
+                      setForm({ ...emptyShare });
+                    }}
+                  />
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* ── Browse Files tab ──────────────────────────────────── */}
+          {tab === "browse" && (
+            <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
+              {shares.length === 0 ? (
+                <div style={{ opacity: 0.6, textAlign: "center", padding: "16px" }}>
+                  No shares configured.
+                </div>
+              ) : (
+                <>
+                  <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
+                    <div style={{ flex: 1 }}>
+                      <DropdownItem
+                        label="Share"
+                        selectedOption={browseShare_}
+                        rgOptions={shares.map((s) => ({
+                          data: s.name,
+                          label: `${s.name} ${s.mounted ? "●" : "○"}`,
+                        }))}
+                        onChange={(opt: any) => {
+                          setBrowseShare(opt.data);
+                          setPath("");
+                          setItems([]);
+                          setBrowseMsg("");
+                        }}
+                      />
+                    </div>
+                    <DialogButton
+                      onClick={() => browse(browseShare_, "")}
+                      style={{ whiteSpace: "nowrap" }}
+                    >
+                      Browse Root
+                    </DialogButton>
+                  </div>
+
+                  {browseMsg && (
+                    <div style={{ opacity: 0.65, fontSize: "12px", overflowWrap: "anywhere" }}>
+                      {browseMsg}
+                    </div>
+                  )}
+
+                  {path && (
+                    <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                      <DialogButton
+                        onClick={() => {
+                          const parent = path.split("/").slice(0, -1).join("/");
+                          browse(browseShare_, parent);
+                        }}
+                        style={{ minWidth: "80px" }}
+                      >
+                        ← Back
+                      </DialogButton>
+                      <div
+                        style={{
+                          flex: 1,
+                          fontSize: "12px",
+                          opacity: 0.75,
+                          overflowWrap: "anywhere",
+                          wordBreak: "break-all",
+                        }}
+                      >
+                        /{path}
+                      </div>
+                    </div>
+                  )}
+
+                  {items.length === 0 && !browseMsg && (
+                    <div style={{ opacity: 0.5, textAlign: "center", padding: "16px" }}>
+                      Select a share and press Browse Root.
+                    </div>
+                  )}
+
+                  <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+                    {items.map((item) =>
+                      item.isDir ? (
+                        <DialogButton
+                          key={item.relativePath}
+                          onClick={() => browse(browseShare_, item.relativePath)}
+                          style={{ textAlign: "left", justifyContent: "flex-start" }}
+                        >
+                          📁 {item.name}
+                        </DialogButton>
+                      ) : (
+                        <div
+                          key={item.relativePath}
+                          style={{
+                            display: "flex",
+                            alignItems: "center",
+                            justifyContent: "space-between",
+                            padding: "8px 12px",
+                            background: "rgba(255,255,255,0.04)",
+                            borderRadius: "6px",
+                          }}
+                        >
+                          <span>📄 {item.name}</span>
+                          {item.size > 0 && (
+                            <span style={{ opacity: 0.55, fontSize: "12px" }}>{sizeText(item.size)}</span>
+                          )}
+                        </div>
+                      )
+                    )}
+                  </div>
+                </>
+              )}
+            </div>
+          )}
+        </Focusable>
+      </DialogBody>
+    </ModalRoot>
+  );
+}
+
+// ─── Panel (small view) ────────────────────────────────────────────────────────
+
+function Content() {
+  const [shares, setShares] = useState<Share[]>([]);
+  const [status, setStatus] = useState<string>("Loading…");
+  const [helperStatus, setHelperStatus] = useState<string>("");
+
+  const refresh = async () => {
+    try {
+      const h = await health();
+      setHelperStatus(
+        `root=${h.isRoot ? "yes" : "no"}  SMB=${h.hasMountCifs ? "ok" : "missing"}  NFS=${h.hasMountNfs ? "ok" : "missing"}`
+      );
+      const list = await getShares();
+      setShares(list);
+      setStatus(list.length ? `${list.filter((s) => s.mounted).length}/${list.length} mounted` : "No shares configured");
+    } catch (e: any) {
+      setStatus(`Error: ${e?.message ?? e}`);
+    }
+  };
+
+  useEffect(() => {
+    refresh();
+  }, []);
+
+  const handleMountToggle = async (share: Share) => {
+    const res = share.mounted ? await unmountShare(share.name) : await mountShare(share.name);
+    toaster.toast({
+      title: "Network Shares",
+      body: res.ok ? (share.mounted ? `Unmounted ${share.name}` : `Mounted ${share.name}`) : res.stderr || res.hint || "Failed",
+    });
+    await refresh();
+  };
 
   return (
     <div>
       <PanelSection title="Network Shares">
         <PanelSectionRow>
-          <div style={{ display: "flex", flexDirection: "column", gap: "4px", lineHeight: 1.25, width: "100%" }}>
-            <div className={staticClasses.Title}>Status</div>
+          <div style={{ display: "flex", flexDirection: "column", gap: "3px", width: "100%" }}>
             <div style={{ whiteSpace: "normal", overflowWrap: "anywhere" }}>{status}</div>
-            {!!helperStatus && <div style={{ opacity: 0.75, fontSize: "12px", whiteSpace: "normal", overflowWrap: "anywhere" }}>{helperStatus}</div>}
+            {!!helperStatus && (
+              <div style={{ opacity: 0.6, fontSize: "11px", whiteSpace: "normal", overflowWrap: "anywhere" }}>
+                {helperStatus}
+              </div>
+            )}
           </div>
         </PanelSectionRow>
-        <PanelSectionRow>
-          <ButtonItem layout="below" onClick={refresh}>Refresh</ButtonItem>
-        </PanelSectionRow>
-        {shares.length > 0 && (
-          <PanelSectionRow>
-            <DropdownItem
-              label="Share"
-              selectedOption={selected}
-              rgOptions={shares.map((s) => ({ data: s.name, label: `${s.name} ${s.mounted ? "●" : "○"}` }))}
-              onChange={(opt: any) => {
-                setSelected(opt.data);
-                setPath("");
-                setItems([]);
-              }}
-            />
+
+        {shares.map((share) => (
+          <PanelSectionRow key={share.name}>
+            <div style={{ display: "flex", alignItems: "center", width: "100%", gap: "6px" }}>
+              <span style={{ fontSize: "14px", color: share.mounted ? "#4caf50" : "#888", flexShrink: 0 }}>
+                {share.mounted ? "●" : "○"}
+              </span>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                  {share.name}
+                </div>
+                <div style={{ fontSize: "11px", opacity: 0.55, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                  {share.host}/{share.share}
+                </div>
+              </div>
+              <ButtonItem
+                layout="inline"
+                onClick={() => handleMountToggle(share)}
+                style={{ flexShrink: 0, minWidth: "80px" }}
+              >
+                {share.mounted ? "Unmount" : "Mount"}
+              </ButtonItem>
+            </div>
           </PanelSectionRow>
-        )}
-        {selectedShare && (
-          <>
-            <PanelSectionRow>
-              <div>{selectedShare.type.toUpperCase()} {selectedShare.host}/{selectedShare.share}</div>
-              <div style={{ opacity: 0.75 }}>{selectedShare.mountpoint}</div>
-            </PanelSectionRow>
-            <PanelSectionRow>
-              <ButtonItem layout="below" onClick={async () => {
-                const res = selectedShare.mounted ? await unmountShare(selectedShare.name) : await mountShare(selectedShare.name);
-                toaster.toast({ title: "Network Shares", body: res.ok ? (selectedShare.mounted ? "Unmounted" : "Mounted") : (res.stderr || res.hint || "Mount failed") });
-                await refresh();
-              }}>{selectedShare.mounted ? "Unmount" : "Mount"}</ButtonItem>
-            </PanelSectionRow>
-            <PanelSectionRow>
-              <ButtonItem layout="below" onClick={() => browse(selectedShare.name, "")}>Browse Root</ButtonItem>
-            </PanelSectionRow>
-            <PanelSectionRow>
-              <ButtonItem layout="below" onClick={async () => {
-                const res = await deleteShare(selectedShare.name);
-                toaster.toast({ title: "Network Shares", body: res.ok ? "Deleted" : (res.stderr || "Delete failed") });
-                setSelected("");
-                setItems([]);
-                setPath("");
-                await refresh();
-              }}>Delete Share</ButtonItem>
-            </PanelSectionRow>
-          </>
-        )}
+        ))}
+
         <PanelSectionRow>
-          <ButtonItem layout="below" onClick={() => setShowAdd(!showAdd)}>{showAdd ? "Hide Add Share" : "Add Share"}</ButtonItem>
+          <ButtonItem
+            layout="below"
+            onClick={() => showModal(<ManagerModal />, window)}
+          >
+            Open Manager
+          </ButtonItem>
+        </PanelSectionRow>
+
+        <PanelSectionRow>
+          <ButtonItem layout="below" onClick={refresh}>
+            Refresh
+          </ButtonItem>
         </PanelSectionRow>
       </PanelSection>
-
-      {showAdd && (
-        <PanelSection title="Add / Replace Share">
-          <PanelSectionRow><TextField label="Name" value={form.name} onChange={textFieldSetter(setForm, "name")} /></PanelSectionRow>
-          <PanelSectionRow>
-            <DropdownItem
-              label="Type"
-              selectedOption={form.type}
-              rgOptions={[{ data: "smb", label: "SMB / CIFS" }, { data: "nfs", label: "NFS" }]}
-              onChange={(opt: any) => setForm({ ...form, type: opt.data })}
-            />
-          </PanelSectionRow>
-          <PanelSectionRow><TextField label="Host/IP" value={form.host} onChange={textFieldSetter(setForm, "host")} /></PanelSectionRow>
-          <PanelSectionRow><TextField label={form.type === "smb" ? "Share name" : "Export path"} value={form.share} onChange={textFieldSetter(setForm, "share")} /></PanelSectionRow>
-          {form.type === "smb" && (
-            <>
-              <PanelSectionRow><ToggleField label="Guest" checked={!!form.guest} onChange={valueSetter(setForm, "guest")} /></PanelSectionRow>
-              {!form.guest && <PanelSectionRow><TextField label="Username" value={form.username || ""} onChange={textFieldSetter(setForm, "username")} /></PanelSectionRow>}
-              {!form.guest && <PanelSectionRow><TextField label="Password" value={form.password || ""} onChange={textFieldSetter(setForm, "password")} /></PanelSectionRow>}
-              <PanelSectionRow><TextField label="Domain optional" value={form.domain || ""} onChange={textFieldSetter(setForm, "domain")} /></PanelSectionRow>
-              <PanelSectionRow><TextField label="SMB version" value={form.version || "3.0"} onChange={textFieldSetter(setForm, "version")} /></PanelSectionRow>
-            </>
-          )}
-          <PanelSectionRow><TextField label="Extra mount options" value={form.mountOptions || ""} onChange={textFieldSetter(setForm, "mountOptions")} /></PanelSectionRow>
-          <PanelSectionRow>
-            <ButtonItem layout="below" onClick={async () => {
-              try {
-                const saved = await saveShare(form);
-                toaster.toast({ title: "Network Shares", body: `Saved ${saved.name}` });
-                setForm({ ...emptyShare });
-                setShowAdd(false);
-                setSelected(saved.name);
-                await refresh();
-              } catch (e: any) {
-                toaster.toast({ title: "Save failed", body: e?.message ?? String(e) });
-              }
-            }}>Save Share</ButtonItem>
-          </PanelSectionRow>
-        </PanelSection>
-      )}
-
-      {selectedShare && (
-        <PanelSection title={`Browse ${selectedShare.name}${path ? `/${path}` : ""}`}>
-          {path && (
-            <PanelSectionRow>
-              <ButtonItem layout="below" onClick={() => {
-                const parent = path.split("/").slice(0, -1).join("/");
-                browse(selectedShare.name, parent);
-              }}>.. Parent Folder</ButtonItem>
-            </PanelSectionRow>
-          )}
-          {items.length === 0 && <PanelSectionRow><div>No files displayed.</div></PanelSectionRow>}
-          {items.map((item) => (
-            <PanelSectionRow key={item.relativePath}>
-              {item.isDir ? (
-                <ButtonItem layout="below" onClick={() => browse(selectedShare.name, item.relativePath)}>📁 {item.name}</ButtonItem>
-              ) : (
-                <div>📄 {item.name} <span style={{ opacity: 0.7 }}>{sizeText(item.size)}</span></div>
-              )}
-            </PanelSectionRow>
-          ))}
-        </PanelSection>
-      )}
     </div>
   );
 }
