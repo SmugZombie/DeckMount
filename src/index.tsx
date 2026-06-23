@@ -507,7 +507,6 @@ function Content() {
               <ButtonItem
                 layout="inline"
                 onClick={() => handleMountToggle(share)}
-                style={{ flexShrink: 0, minWidth: "80px" }}
               >
                 {share.mounted ? "Unmount" : "Mount"}
               </ButtonItem>

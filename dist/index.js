@@ -125,77 +125,158 @@ function sizeText(bytes) {
     }
     return `${value.toFixed(unit === 0 ? 0 : 1)} ${units[unit]}`;
 }
-function Content() {
+// ─── Share Form ────────────────────────────────────────────────────────────────
+function ShareForm({ form, setForm, onSave, onCancel, }) {
+    return (SP_JSX.jsxs("div", { style: { display: "flex", flexDirection: "column", gap: "8px" }, children: [SP_JSX.jsx(DFL.TextField, { label: "Name", value: form.name, onChange: textFieldSetter(setForm, "name") }), SP_JSX.jsx(DFL.DropdownItem, { label: "Type", selectedOption: form.type, rgOptions: [
+                    { data: "smb", label: "SMB / CIFS" },
+                    { data: "nfs", label: "NFS" },
+                ], onChange: (opt) => setForm((f) => ({ ...f, type: opt.data })) }), SP_JSX.jsx(DFL.TextField, { label: "Host / IP", value: form.host, onChange: textFieldSetter(setForm, "host") }), SP_JSX.jsx(DFL.TextField, { label: form.type === "smb" ? "Share name" : "Export path", value: form.share, onChange: textFieldSetter(setForm, "share") }), form.type === "smb" && (SP_JSX.jsxs(SP_JSX.Fragment, { children: [SP_JSX.jsx(DFL.ToggleField, { label: "Guest access", checked: !!form.guest, onChange: valueSetter(setForm, "guest") }), !form.guest && (SP_JSX.jsxs(SP_JSX.Fragment, { children: [SP_JSX.jsx(DFL.TextField, { label: "Username", value: form.username || "", onChange: textFieldSetter(setForm, "username") }), SP_JSX.jsx(DFL.TextField, { label: "Password", value: form.password || "", onChange: textFieldSetter(setForm, "password") })] })), SP_JSX.jsx(DFL.TextField, { label: "Domain (optional)", value: form.domain || "", onChange: textFieldSetter(setForm, "domain") }), SP_JSX.jsx(DFL.TextField, { label: "SMB version", value: form.version || "3.0", onChange: textFieldSetter(setForm, "version") })] })), SP_JSX.jsx(DFL.TextField, { label: "Extra mount options", value: form.mountOptions || "", onChange: textFieldSetter(setForm, "mountOptions") }), SP_JSX.jsxs("div", { style: { display: "flex", gap: "8px", marginTop: "4px" }, children: [SP_JSX.jsx(DFL.DialogButton, { style: { flex: 1 }, onClick: onSave, children: "Save" }), SP_JSX.jsx(DFL.DialogButton, { style: { flex: 1, opacity: 0.7 }, onClick: onCancel, children: "Cancel" })] })] }));
+}
+// ─── Manager Modal ─────────────────────────────────────────────────────────────
+function ManagerModal({ closeModal, startTab }) {
+    const [tab, setTab] = SP_REACT.useState(startTab ?? "shares");
     const [shares, setShares] = SP_REACT.useState([]);
     const [form, setForm] = SP_REACT.useState(emptyShare);
-    const [selected, setSelected] = SP_REACT.useState("");
+    const [showForm, setShowForm] = SP_REACT.useState(false);
+    const [editingName, setEditingName] = SP_REACT.useState(null);
+    // browse state
+    const [browseShare_, setBrowseShare] = SP_REACT.useState("");
     const [path, setPath] = SP_REACT.useState("");
     const [items, setItems] = SP_REACT.useState([]);
-    const [status, setStatus] = SP_REACT.useState("Loading...");
-    const [showAdd, setShowAdd] = SP_REACT.useState(false);
+    const [browseMsg, setBrowseMsg] = SP_REACT.useState("");
+    const refresh = async () => {
+        const list = await getShares();
+        setShares(list);
+        if (!browseShare_ && list.length > 0)
+            setBrowseShare(list[0].name);
+    };
+    SP_REACT.useEffect(() => {
+        refresh();
+    }, []);
+    const browse = async (shareName = browseShare_, nextPath = path) => {
+        if (!shareName)
+            return;
+        setBrowseMsg("Loading…");
+        const res = await browseShare(shareName, nextPath || "");
+        if (!res.ok) {
+            setItems([]);
+            setBrowseMsg(res.error || "Browse failed");
+            return;
+        }
+        setPath(res.path || "");
+        setItems(res.items || []);
+        setBrowseMsg(res.mountpoint ? `📂 ${res.mountpoint}` : "");
+    };
+    const handleSave = async () => {
+        try {
+            const saved = await saveShare(form);
+            toaster.toast({ title: "Network Shares", body: `Saved ${saved.name}` });
+            setShowForm(false);
+            setEditingName(null);
+            setForm({ ...emptyShare });
+            await refresh();
+        }
+        catch (e) {
+            toaster.toast({ title: "Save failed", body: e?.message ?? String(e) });
+        }
+    };
+    const handleDelete = async (name) => {
+        const res = await deleteShare(name);
+        toaster.toast({ title: "Network Shares", body: res.ok ? `Deleted ${name}` : res.stderr || "Delete failed" });
+        await refresh();
+    };
+    const handleMountToggle = async (share) => {
+        const res = share.mounted ? await unmountShare(share.name) : await mountShare(share.name);
+        toaster.toast({
+            title: "Network Shares",
+            body: res.ok ? (share.mounted ? `Unmounted ${share.name}` : `Mounted ${share.name}`) : res.stderr || res.hint || "Failed",
+        });
+        await refresh();
+    };
+    const tabBtn = (label, value) => (SP_JSX.jsx(DFL.DialogButton, { onClick: () => setTab(value), style: {
+            flex: 1,
+            fontWeight: tab === value ? "bold" : "normal",
+            opacity: tab === value ? 1 : 0.55,
+            borderBottom: tab === value ? "2px solid #1a9fff" : "2px solid transparent",
+        }, children: label }));
+    return (SP_JSX.jsxs(DFL.ModalRoot, { onCancel: closeModal, children: [SP_JSX.jsx(DFL.DialogHeader, { children: "Network Shares Manager" }), SP_JSX.jsx(DFL.DialogBody, { children: SP_JSX.jsxs(DFL.Focusable, { style: { display: "flex", flexDirection: "column", gap: "16px" }, children: [SP_JSX.jsxs("div", { style: { display: "flex", gap: "8px" }, children: [tabBtn("Manage Shares", "shares"), tabBtn("Browse Files", "browse")] }), tab === "shares" && (SP_JSX.jsxs("div", { style: { display: "flex", flexDirection: "column", gap: "12px" }, children: [shares.length === 0 && (SP_JSX.jsx("div", { style: { opacity: 0.6, textAlign: "center", padding: "12px" }, children: "No shares configured. Add one below." })), shares.map((share) => (SP_JSX.jsxs("div", { style: {
+                                        background: "rgba(255,255,255,0.06)",
+                                        borderRadius: "8px",
+                                        padding: "12px",
+                                        display: "flex",
+                                        flexDirection: "column",
+                                        gap: "6px",
+                                    }, children: [SP_JSX.jsxs("div", { style: { display: "flex", alignItems: "center", gap: "8px" }, children: [SP_JSX.jsx("span", { style: { fontSize: "18px", color: share.mounted ? "#4caf50" : "#aaa" }, children: share.mounted ? "●" : "○" }), SP_JSX.jsxs("div", { style: { flex: 1 }, children: [SP_JSX.jsx("div", { style: { fontWeight: "bold" }, children: share.name }), SP_JSX.jsxs("div", { style: { opacity: 0.65, fontSize: "12px" }, children: [share.type.toUpperCase(), " \u00B7 ", share.host, "/", share.share] }), share.mountpoint && (SP_JSX.jsx("div", { style: { opacity: 0.5, fontSize: "11px" }, children: share.mountpoint }))] })] }), SP_JSX.jsxs("div", { style: { display: "flex", gap: "6px" }, children: [SP_JSX.jsx(DFL.DialogButton, { style: { flex: 1 }, onClick: () => handleMountToggle(share), children: share.mounted ? "Unmount" : "Mount" }), SP_JSX.jsx(DFL.DialogButton, { style: { flex: 1 }, onClick: () => {
+                                                        setForm({ ...share, password: "" });
+                                                        setEditingName(share.name);
+                                                        setShowForm(true);
+                                                    }, children: "Edit" }), SP_JSX.jsx(DFL.DialogButton, { style: { flex: 1, opacity: 0.7 }, onClick: () => handleDelete(share.name), children: "Delete" })] })] }, share.name))), !showForm && (SP_JSX.jsx(DFL.DialogButton, { onClick: () => {
+                                        setForm({ ...emptyShare });
+                                        setEditingName(null);
+                                        setShowForm(true);
+                                    }, children: "+ Add Share" })), showForm && (SP_JSX.jsxs("div", { style: {
+                                        background: "rgba(255,255,255,0.06)",
+                                        borderRadius: "8px",
+                                        padding: "12px",
+                                    }, children: [SP_JSX.jsx("div", { style: { fontWeight: "bold", marginBottom: "10px" }, children: editingName ? `Edit: ${editingName}` : "New Share" }), SP_JSX.jsx(ShareForm, { form: form, setForm: setForm, onSave: handleSave, onCancel: () => {
+                                                setShowForm(false);
+                                                setEditingName(null);
+                                                setForm({ ...emptyShare });
+                                            } })] }))] })), tab === "browse" && (SP_JSX.jsx("div", { style: { display: "flex", flexDirection: "column", gap: "10px" }, children: shares.length === 0 ? (SP_JSX.jsx("div", { style: { opacity: 0.6, textAlign: "center", padding: "16px" }, children: "No shares configured." })) : (SP_JSX.jsxs(SP_JSX.Fragment, { children: [SP_JSX.jsxs("div", { style: { display: "flex", gap: "8px", alignItems: "center" }, children: [SP_JSX.jsx("div", { style: { flex: 1 }, children: SP_JSX.jsx(DFL.DropdownItem, { label: "Share", selectedOption: browseShare_, rgOptions: shares.map((s) => ({
+                                                        data: s.name,
+                                                        label: `${s.name} ${s.mounted ? "●" : "○"}`,
+                                                    })), onChange: (opt) => {
+                                                        setBrowseShare(opt.data);
+                                                        setPath("");
+                                                        setItems([]);
+                                                        setBrowseMsg("");
+                                                    } }) }), SP_JSX.jsx(DFL.DialogButton, { onClick: () => browse(browseShare_, ""), style: { whiteSpace: "nowrap" }, children: "Browse Root" })] }), browseMsg && (SP_JSX.jsx("div", { style: { opacity: 0.65, fontSize: "12px", overflowWrap: "anywhere" }, children: browseMsg })), path && (SP_JSX.jsxs("div", { style: { display: "flex", alignItems: "center", gap: "8px" }, children: [SP_JSX.jsx(DFL.DialogButton, { onClick: () => {
+                                                    const parent = path.split("/").slice(0, -1).join("/");
+                                                    browse(browseShare_, parent);
+                                                }, style: { minWidth: "80px" }, children: "\u2190 Back" }), SP_JSX.jsxs("div", { style: {
+                                                    flex: 1,
+                                                    fontSize: "12px",
+                                                    opacity: 0.75,
+                                                    overflowWrap: "anywhere",
+                                                    wordBreak: "break-all",
+                                                }, children: ["/", path] })] })), items.length === 0 && !browseMsg && (SP_JSX.jsx("div", { style: { opacity: 0.5, textAlign: "center", padding: "16px" }, children: "Select a share and press Browse Root." })), SP_JSX.jsx("div", { style: { display: "flex", flexDirection: "column", gap: "4px" }, children: items.map((item) => item.isDir ? (SP_JSX.jsxs(DFL.DialogButton, { onClick: () => browse(browseShare_, item.relativePath), style: { textAlign: "left", justifyContent: "flex-start" }, children: ["\uD83D\uDCC1 ", item.name] }, item.relativePath)) : (SP_JSX.jsxs("div", { style: {
+                                                display: "flex",
+                                                alignItems: "center",
+                                                justifyContent: "space-between",
+                                                padding: "8px 12px",
+                                                background: "rgba(255,255,255,0.04)",
+                                                borderRadius: "6px",
+                                            }, children: [SP_JSX.jsxs("span", { children: ["\uD83D\uDCC4 ", item.name] }), item.size > 0 && (SP_JSX.jsx("span", { style: { opacity: 0.55, fontSize: "12px" }, children: sizeText(item.size) }))] }, item.relativePath))) })] })) }))] }) })] }));
+}
+// ─── Panel (small view) ────────────────────────────────────────────────────────
+function Content() {
+    const [shares, setShares] = SP_REACT.useState([]);
+    const [status, setStatus] = SP_REACT.useState("Loading…");
     const [helperStatus, setHelperStatus] = SP_REACT.useState("");
     const refresh = async () => {
         try {
             const h = await health();
-            setHelperStatus(`root=${h.isRoot ? "yes" : "no"}, SMB=${h.hasMountCifs ? "yes" : "missing"}, NFS=${h.hasMountNfs ? "yes" : "missing"}`);
+            setHelperStatus(`root=${h.isRoot ? "yes" : "no"}  SMB=${h.hasMountCifs ? "ok" : "missing"}  NFS=${h.hasMountNfs ? "ok" : "missing"}`);
             const list = await getShares();
             setShares(list);
-            if (!selected && list.length > 0)
-                setSelected(list[0].name);
-            setStatus(list.length ? "Ready" : "Add a share to get started");
+            setStatus(list.length ? `${list.filter((s) => s.mounted).length}/${list.length} mounted` : "No shares configured");
         }
         catch (e) {
             setStatus(`Error: ${e?.message ?? e}`);
         }
     };
-    const browse = async (shareName = selected, nextPath = path) => {
-        if (!shareName)
-            return;
-        const res = await browseShare(shareName, nextPath || "");
-        if (!res.ok) {
-            setItems([]);
-            setStatus(res.error || "Browse failed");
-            return;
-        }
-        setPath(res.path || "");
-        setItems(res.items || []);
-        setStatus(res.mountpoint || "Mounted");
-    };
     SP_REACT.useEffect(() => {
         refresh();
     }, []);
-    const selectedShare = shares.find((s) => s.name === selected);
-    return (SP_JSX.jsxs("div", { children: [SP_JSX.jsxs(DFL.PanelSection, { title: "Network Shares", children: [SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsxs("div", { style: { display: "flex", flexDirection: "column", gap: "4px", lineHeight: 1.25, width: "100%" }, children: [SP_JSX.jsx("div", { className: DFL.staticClasses.Title, children: "Status" }), SP_JSX.jsx("div", { style: { whiteSpace: "normal", overflowWrap: "anywhere" }, children: status }), !!helperStatus && SP_JSX.jsx("div", { style: { opacity: 0.75, fontSize: "12px", whiteSpace: "normal", overflowWrap: "anywhere" }, children: helperStatus })] }) }), SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx(DFL.ButtonItem, { layout: "below", onClick: refresh, children: "Refresh" }) }), shares.length > 0 && (SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx(DFL.DropdownItem, { label: "Share", selectedOption: selected, rgOptions: shares.map((s) => ({ data: s.name, label: `${s.name} ${s.mounted ? "●" : "○"}` })), onChange: (opt) => {
-                                setSelected(opt.data);
-                                setPath("");
-                                setItems([]);
-                            } }) })), selectedShare && (SP_JSX.jsxs(SP_JSX.Fragment, { children: [SP_JSX.jsxs(DFL.PanelSectionRow, { children: [SP_JSX.jsxs("div", { children: [selectedShare.type.toUpperCase(), " ", selectedShare.host, "/", selectedShare.share] }), SP_JSX.jsx("div", { style: { opacity: 0.75 }, children: selectedShare.mountpoint })] }), SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx(DFL.ButtonItem, { layout: "below", onClick: async () => {
-                                        const res = selectedShare.mounted ? await unmountShare(selectedShare.name) : await mountShare(selectedShare.name);
-                                        toaster.toast({ title: "Network Shares", body: res.ok ? (selectedShare.mounted ? "Unmounted" : "Mounted") : (res.stderr || res.hint || "Mount failed") });
-                                        await refresh();
-                                    }, children: selectedShare.mounted ? "Unmount" : "Mount" }) }), SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx(DFL.ButtonItem, { layout: "below", onClick: () => browse(selectedShare.name, ""), children: "Browse Root" }) }), SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx(DFL.ButtonItem, { layout: "below", onClick: async () => {
-                                        const res = await deleteShare(selectedShare.name);
-                                        toaster.toast({ title: "Network Shares", body: res.ok ? "Deleted" : (res.stderr || "Delete failed") });
-                                        setSelected("");
-                                        setItems([]);
-                                        setPath("");
-                                        await refresh();
-                                    }, children: "Delete Share" }) })] })), SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx(DFL.ButtonItem, { layout: "below", onClick: () => setShowAdd(!showAdd), children: showAdd ? "Hide Add Share" : "Add Share" }) })] }), showAdd && (SP_JSX.jsxs(DFL.PanelSection, { title: "Add / Replace Share", children: [SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx(DFL.TextField, { label: "Name", value: form.name, onChange: textFieldSetter(setForm, "name") }) }), SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx(DFL.DropdownItem, { label: "Type", selectedOption: form.type, rgOptions: [{ data: "smb", label: "SMB / CIFS" }, { data: "nfs", label: "NFS" }], onChange: (opt) => setForm({ ...form, type: opt.data }) }) }), SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx(DFL.TextField, { label: "Host/IP", value: form.host, onChange: textFieldSetter(setForm, "host") }) }), SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx(DFL.TextField, { label: form.type === "smb" ? "Share name" : "Export path", value: form.share, onChange: textFieldSetter(setForm, "share") }) }), form.type === "smb" && (SP_JSX.jsxs(SP_JSX.Fragment, { children: [SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx(DFL.ToggleField, { label: "Guest", checked: !!form.guest, onChange: valueSetter(setForm, "guest") }) }), !form.guest && SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx(DFL.TextField, { label: "Username", value: form.username || "", onChange: textFieldSetter(setForm, "username") }) }), !form.guest && SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx(DFL.TextField, { label: "Password", value: form.password || "", onChange: textFieldSetter(setForm, "password") }) }), SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx(DFL.TextField, { label: "Domain optional", value: form.domain || "", onChange: textFieldSetter(setForm, "domain") }) }), SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx(DFL.TextField, { label: "SMB version", value: form.version || "3.0", onChange: textFieldSetter(setForm, "version") }) })] })), SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx(DFL.TextField, { label: "Extra mount options", value: form.mountOptions || "", onChange: textFieldSetter(setForm, "mountOptions") }) }), SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx(DFL.ButtonItem, { layout: "below", onClick: async () => {
-                                try {
-                                    const saved = await saveShare(form);
-                                    toaster.toast({ title: "Network Shares", body: `Saved ${saved.name}` });
-                                    setForm({ ...emptyShare });
-                                    setShowAdd(false);
-                                    setSelected(saved.name);
-                                    await refresh();
-                                }
-                                catch (e) {
-                                    toaster.toast({ title: "Save failed", body: e?.message ?? String(e) });
-                                }
-                            }, children: "Save Share" }) })] })), selectedShare && (SP_JSX.jsxs(DFL.PanelSection, { title: `Browse ${selectedShare.name}${path ? `/${path}` : ""}`, children: [path && (SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx(DFL.ButtonItem, { layout: "below", onClick: () => {
-                                const parent = path.split("/").slice(0, -1).join("/");
-                                browse(selectedShare.name, parent);
-                            }, children: ".. Parent Folder" }) })), items.length === 0 && SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx("div", { children: "No files displayed." }) }), items.map((item) => (SP_JSX.jsx(DFL.PanelSectionRow, { children: item.isDir ? (SP_JSX.jsxs(DFL.ButtonItem, { layout: "below", onClick: () => browse(selectedShare.name, item.relativePath), children: ["\uD83D\uDCC1 ", item.name] })) : (SP_JSX.jsxs("div", { children: ["\uD83D\uDCC4 ", item.name, " ", SP_JSX.jsx("span", { style: { opacity: 0.7 }, children: sizeText(item.size) })] })) }, item.relativePath)))] }))] }));
+    const handleMountToggle = async (share) => {
+        const res = share.mounted ? await unmountShare(share.name) : await mountShare(share.name);
+        toaster.toast({
+            title: "Network Shares",
+            body: res.ok ? (share.mounted ? `Unmounted ${share.name}` : `Mounted ${share.name}`) : res.stderr || res.hint || "Failed",
+        });
+        await refresh();
+    };
+    return (SP_JSX.jsx("div", { children: SP_JSX.jsxs(DFL.PanelSection, { title: "Network Shares", children: [SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsxs("div", { style: { display: "flex", flexDirection: "column", gap: "3px", width: "100%" }, children: [SP_JSX.jsx("div", { style: { whiteSpace: "normal", overflowWrap: "anywhere" }, children: status }), !!helperStatus && (SP_JSX.jsx("div", { style: { opacity: 0.6, fontSize: "11px", whiteSpace: "normal", overflowWrap: "anywhere" }, children: helperStatus }))] }) }), shares.map((share) => (SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsxs("div", { style: { display: "flex", alignItems: "center", width: "100%", gap: "6px" }, children: [SP_JSX.jsx("span", { style: { fontSize: "14px", color: share.mounted ? "#4caf50" : "#888", flexShrink: 0 }, children: share.mounted ? "●" : "○" }), SP_JSX.jsxs("div", { style: { flex: 1, minWidth: 0 }, children: [SP_JSX.jsx("div", { style: { overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }, children: share.name }), SP_JSX.jsxs("div", { style: { fontSize: "11px", opacity: 0.55, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }, children: [share.host, "/", share.share] })] }), SP_JSX.jsx(DFL.ButtonItem, { layout: "inline", onClick: () => handleMountToggle(share), children: share.mounted ? "Unmount" : "Mount" })] }) }, share.name))), SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx(DFL.ButtonItem, { layout: "below", onClick: () => DFL.showModal(SP_JSX.jsx(ManagerModal, {}), window), children: "Open Manager" }) }), SP_JSX.jsx(DFL.PanelSectionRow, { children: SP_JSX.jsx(DFL.ButtonItem, { layout: "below", onClick: refresh, children: "Refresh" }) })] }) }));
 }
 var index = definePlugin(() => ({
     name: "Network Shares",
