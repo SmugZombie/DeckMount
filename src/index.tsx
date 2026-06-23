@@ -6,9 +6,6 @@ import {
   ToggleField,
   DropdownItem,
   staticClasses,
-  showModal,
-  ModalRoot,
-  Focusable,
 } from "@decky/ui";
 import { callable, definePlugin, toaster } from "@decky/api";
 import { useEffect, useState } from "react";
@@ -59,8 +56,15 @@ const emptyShare: Share = {
   mountOptions: "",
 };
 
-function fieldSetter<T extends keyof Share>(form: Share, setForm: (s: Share) => void, key: T) {
-  return (value: any) => setForm({ ...form, [key]: value });
+function textFieldSetter<T extends keyof Share>(setForm: React.Dispatch<React.SetStateAction<Share>>, key: T) {
+  return (event: any) => {
+    const value = event?.target?.value ?? (typeof event === "string" ? event : "");
+    setForm((current) => ({ ...current, [key]: value }));
+  };
+}
+
+function valueSetter<T extends keyof Share>(setForm: React.Dispatch<React.SetStateAction<Share>>, key: T) {
+  return (value: any) => setForm((current) => ({ ...current, [key]: value }));
 }
 
 function sizeText(bytes: number) {
@@ -75,102 +79,12 @@ function sizeText(bytes: number) {
   return `${value.toFixed(unit === 0 ? 0 : 1)} ${units[unit]}`;
 }
 
-const rowStyle: React.CSSProperties = {
-  display: "flex",
-  alignItems: "center",
-  padding: "10px 16px",
-  gap: "10px",
-  borderBottom: "1px solid rgba(255,255,255,0.06)",
-  cursor: "pointer",
-  fontSize: "15px",
-};
-
-function FileBrowserModal({ shareName, closeModal }: { shareName: string; closeModal?: () => void }) {
-  const [path, setPath] = useState("");
-  const [items, setItems] = useState<BrowseItem[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState("");
-
-  const browse = async (nextPath: string) => {
-    setLoading(true);
-    setError("");
-    const res = await browseShare(shareName, nextPath);
-    setLoading(false);
-    if (!res.ok) {
-      setError(res.error || "Browse failed");
-      return;
-    }
-    setPath(res.path || "");
-    setItems(res.items || []);
-  };
-
-  useEffect(() => { browse(""); }, []);
-
-  const goUp = () => browse(path.split("/").slice(0, -1).join("/"));
-
-  return (
-    <ModalRoot bAllowFullSize onCancel={closeModal}>
-      <div style={{ display: "flex", flexDirection: "column", height: "100%", overflow: "hidden" }}>
-        <div style={{ padding: "12px 16px 10px", borderBottom: "1px solid rgba(255,255,255,0.15)", flexShrink: 0 }}>
-          <div style={{ fontSize: "18px", fontWeight: "bold" }}>📁 {shareName}</div>
-          <div style={{ opacity: 0.55, fontSize: "13px", fontFamily: "monospace", marginTop: 2 }}>
-            /{path}
-          </div>
-        </div>
-
-        <Focusable style={{ flex: 1, overflowY: "auto" }}>
-          {loading && (
-            <div style={{ padding: "16px", opacity: 0.6 }}>Loading…</div>
-          )}
-          {error && (
-            <div style={{ padding: "16px", color: "#ff6b6b" }}>{error}</div>
-          )}
-          {!loading && !error && (
-            <>
-              {path && (
-                <Focusable onActivate={goUp}>
-                  <div style={rowStyle} onClick={goUp}>
-                    <span style={{ fontSize: "18px" }}>⬆️</span>
-                    <span style={{ opacity: 0.8 }}>.. Parent folder</span>
-                  </div>
-                </Focusable>
-              )}
-              {items.length === 0 && (
-                <div style={{ padding: "16px", opacity: 0.5 }}>Empty folder</div>
-              )}
-              {items.map((item) => (
-                <Focusable
-                  key={item.relativePath}
-                  onActivate={item.isDir ? () => browse(item.relativePath) : undefined}
-                >
-                  <div
-                    style={{ ...rowStyle, cursor: item.isDir ? "pointer" : "default" }}
-                    onClick={item.isDir ? () => browse(item.relativePath) : undefined}
-                  >
-                    <span style={{ fontSize: "18px" }}>{item.isDir ? "📁" : "📄"}</span>
-                    <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                      {item.name}
-                    </span>
-                    {!item.isDir && item.size > 0 && (
-                      <span style={{ opacity: 0.55, fontSize: "13px", flexShrink: 0 }}>
-                        {sizeText(item.size)}
-                      </span>
-                    )}
-                  </div>
-                </Focusable>
-              ))}
-            </>
-          )}
-        </Focusable>
-      </div>
-    </ModalRoot>
-  );
-}
-
 function Content() {
   const [shares, setShares] = useState<Share[]>([]);
   const [form, setForm] = useState<Share>(emptyShare);
   const [selected, setSelected] = useState<string>("");
+  const [path, setPath] = useState<string>("");
+  const [items, setItems] = useState<BrowseItem[]>([]);
   const [status, setStatus] = useState<string>("Loading...");
   const [showAdd, setShowAdd] = useState<boolean>(false);
   const [helperStatus, setHelperStatus] = useState<string>("");
@@ -188,6 +102,19 @@ function Content() {
     }
   };
 
+  const browse = async (shareName = selected, nextPath = path) => {
+    if (!shareName) return;
+    const res = await browseShare(shareName, nextPath || "");
+    if (!res.ok) {
+      setItems([]);
+      setStatus(res.error || "Browse failed");
+      return;
+    }
+    setPath(res.path || "");
+    setItems(res.items || []);
+    setStatus(res.mountpoint || "Mounted");
+  };
+
   useEffect(() => {
     refresh();
   }, []);
@@ -198,9 +125,11 @@ function Content() {
     <div>
       <PanelSection title="Network Shares">
         <PanelSectionRow>
-          <div className={staticClasses.Title}>Status</div>
-          <div>{status}</div>
-          <div style={{ opacity: 0.75, fontSize: "12px" }}>{helperStatus}</div>
+          <div style={{ display: "flex", flexDirection: "column", gap: "4px", lineHeight: 1.25, width: "100%" }}>
+            <div className={staticClasses.Title}>Status</div>
+            <div style={{ whiteSpace: "normal", overflowWrap: "anywhere" }}>{status}</div>
+            {!!helperStatus && <div style={{ opacity: 0.75, fontSize: "12px", whiteSpace: "normal", overflowWrap: "anywhere" }}>{helperStatus}</div>}
+          </div>
         </PanelSectionRow>
         <PanelSectionRow>
           <ButtonItem layout="below" onClick={refresh}>Refresh</ButtonItem>
@@ -211,7 +140,11 @@ function Content() {
               label="Share"
               selectedOption={selected}
               rgOptions={shares.map((s) => ({ data: s.name, label: `${s.name} ${s.mounted ? "●" : "○"}` }))}
-              onChange={(opt: any) => setSelected(opt.data)}
+              onChange={(opt: any) => {
+                setSelected(opt.data);
+                setPath("");
+                setItems([]);
+              }}
             />
           </PanelSectionRow>
         )}
@@ -229,13 +162,15 @@ function Content() {
               }}>{selectedShare.mounted ? "Unmount" : "Mount"}</ButtonItem>
             </PanelSectionRow>
             <PanelSectionRow>
-              <ButtonItem layout="below" onClick={() => showModal(<FileBrowserModal shareName={selectedShare.name} />)}>Browse</ButtonItem>
+              <ButtonItem layout="below" onClick={() => browse(selectedShare.name, "")}>Browse Root</ButtonItem>
             </PanelSectionRow>
             <PanelSectionRow>
               <ButtonItem layout="below" onClick={async () => {
                 const res = await deleteShare(selectedShare.name);
                 toaster.toast({ title: "Network Shares", body: res.ok ? "Deleted" : (res.stderr || "Delete failed") });
                 setSelected("");
+                setItems([]);
+                setPath("");
                 await refresh();
               }}>Delete Share</ButtonItem>
             </PanelSectionRow>
@@ -248,7 +183,7 @@ function Content() {
 
       {showAdd && (
         <PanelSection title="Add / Replace Share">
-          <PanelSectionRow><TextField label="Name" value={form.name} onChange={fieldSetter(form, setForm, "name")} /></PanelSectionRow>
+          <PanelSectionRow><TextField label="Name" value={form.name} onChange={textFieldSetter(setForm, "name")} /></PanelSectionRow>
           <PanelSectionRow>
             <DropdownItem
               label="Type"
@@ -257,24 +192,24 @@ function Content() {
               onChange={(opt: any) => setForm({ ...form, type: opt.data })}
             />
           </PanelSectionRow>
-          <PanelSectionRow><TextField label="Host/IP" value={form.host} onChange={fieldSetter(form, setForm, "host")} /></PanelSectionRow>
-          <PanelSectionRow><TextField label={form.type === "smb" ? "Share name" : "Export path"} value={form.share} onChange={fieldSetter(form, setForm, "share")} /></PanelSectionRow>
+          <PanelSectionRow><TextField label="Host/IP" value={form.host} onChange={textFieldSetter(setForm, "host")} /></PanelSectionRow>
+          <PanelSectionRow><TextField label={form.type === "smb" ? "Share name" : "Export path"} value={form.share} onChange={textFieldSetter(setForm, "share")} /></PanelSectionRow>
           {form.type === "smb" && (
             <>
-              <PanelSectionRow><ToggleField label="Guest" checked={!!form.guest} onChange={fieldSetter(form, setForm, "guest")} /></PanelSectionRow>
-              {!form.guest && <PanelSectionRow><TextField label="Username" value={form.username || ""} onChange={fieldSetter(form, setForm, "username")} /></PanelSectionRow>}
-              {!form.guest && <PanelSectionRow><TextField label="Password" value={form.password || ""} onChange={fieldSetter(form, setForm, "password")} /></PanelSectionRow>}
-              <PanelSectionRow><TextField label="Domain optional" value={form.domain || ""} onChange={fieldSetter(form, setForm, "domain")} /></PanelSectionRow>
-              <PanelSectionRow><TextField label="SMB version" value={form.version || "3.0"} onChange={fieldSetter(form, setForm, "version")} /></PanelSectionRow>
+              <PanelSectionRow><ToggleField label="Guest" checked={!!form.guest} onChange={valueSetter(setForm, "guest")} /></PanelSectionRow>
+              {!form.guest && <PanelSectionRow><TextField label="Username" value={form.username || ""} onChange={textFieldSetter(setForm, "username")} /></PanelSectionRow>}
+              {!form.guest && <PanelSectionRow><TextField label="Password" value={form.password || ""} onChange={textFieldSetter(setForm, "password")} /></PanelSectionRow>}
+              <PanelSectionRow><TextField label="Domain optional" value={form.domain || ""} onChange={textFieldSetter(setForm, "domain")} /></PanelSectionRow>
+              <PanelSectionRow><TextField label="SMB version" value={form.version || "3.0"} onChange={textFieldSetter(setForm, "version")} /></PanelSectionRow>
             </>
           )}
-          <PanelSectionRow><TextField label="Extra mount options" value={form.mountOptions || ""} onChange={fieldSetter(form, setForm, "mountOptions")} /></PanelSectionRow>
+          <PanelSectionRow><TextField label="Extra mount options" value={form.mountOptions || ""} onChange={textFieldSetter(setForm, "mountOptions")} /></PanelSectionRow>
           <PanelSectionRow>
             <ButtonItem layout="below" onClick={async () => {
               try {
                 const saved = await saveShare(form);
                 toaster.toast({ title: "Network Shares", body: `Saved ${saved.name}` });
-                setForm(emptyShare);
+                setForm({ ...emptyShare });
                 setShowAdd(false);
                 setSelected(saved.name);
                 await refresh();
@@ -286,6 +221,28 @@ function Content() {
         </PanelSection>
       )}
 
+      {selectedShare && (
+        <PanelSection title={`Browse ${selectedShare.name}${path ? `/${path}` : ""}`}>
+          {path && (
+            <PanelSectionRow>
+              <ButtonItem layout="below" onClick={() => {
+                const parent = path.split("/").slice(0, -1).join("/");
+                browse(selectedShare.name, parent);
+              }}>.. Parent Folder</ButtonItem>
+            </PanelSectionRow>
+          )}
+          {items.length === 0 && <PanelSectionRow><div>No files displayed.</div></PanelSectionRow>}
+          {items.map((item) => (
+            <PanelSectionRow key={item.relativePath}>
+              {item.isDir ? (
+                <ButtonItem layout="below" onClick={() => browse(selectedShare.name, item.relativePath)}>📁 {item.name}</ButtonItem>
+              ) : (
+                <div>📄 {item.name} <span style={{ opacity: 0.7 }}>{sizeText(item.size)}</span></div>
+              )}
+            </PanelSectionRow>
+          ))}
+        </PanelSection>
+      )}
     </div>
   );
 }

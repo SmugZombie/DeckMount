@@ -1,13 +1,20 @@
 {
   "name": "decky-network-shares",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Decky Loader plugin for mounting and browsing SMB/CIFS and NFS shares in Steam Game Mode.",
   "type": "module",
   "scripts": {
     "build": "rollup -c",
     "watch": "rollup -c -w"
   },
-  "keywords": ["decky", "steam-deck", "smb", "cifs", "nfs", "network-share"],
+  "keywords": [
+    "decky",
+    "steam-deck",
+    "smb",
+    "cifs",
+    "nfs",
+    "network-share"
+  ],
   "author": "Ron Egli / OpenAI",
   "license": "MIT",
   "devDependencies": {
@@ -25,7 +32,10 @@
   },
   "pnpm": {
     "peerDependencyRules": {
-      "ignoreMissing": ["react", "react-dom"]
+      "ignoreMissing": [
+        "react",
+        "react-dom"
+      ]
     }
   }
 }

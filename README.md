@@ -12,7 +12,7 @@ Decky Loader plugin for Steam Deck Game Mode / Steam Big Picture that mounts and
 
 ## Important notes
 
-- This plugin uses the Decky `_root` flag because Linux mount/umount operations require root.
+- This plugin uses Decky root flags because Linux mount/umount operations require root. The package includes both `root` and `_root` for compatibility across Decky versions.
 - SMB passwords are saved in Decky plugin settings. They are not encrypted. Use a limited network-share account.
 - SteamOS may need mount helpers installed. SMB requires `mount.cifs` from `cifs-utils`; NFS requires `mount.nfs` from `nfs-utils`.
 - SteamOS updates can revert packages installed outside Flatpak/Decky. If mounts stop working after an OS update, check the helper status in the plugin.
@@ -66,3 +66,10 @@ sudo steamos-readonly enable
 ```
 
 Only do this if you are comfortable modifying SteamOS. A future SteamOS update may remove those packages.
+
+
+## v0.1.1 fixes
+
+- Fixed add-share text inputs showing `[object Object]` by handling Decky `TextField` change events correctly.
+- Moved status/helper text into a single non-overlapping vertical block.
+- Added the `root` plugin flag alongside `_root` for Decky versions that expect `root`.
